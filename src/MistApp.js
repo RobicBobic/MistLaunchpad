@@ -144,7 +144,6 @@ function buildHistory(basePrice, coinId, count = 60) {
   for (let i = count; i >= 0; i--) {
     const t = now - i * 60;
     const open = price;
-    const vol  = rng();
     const move = (rng() - 0.45) * open * 0.04;
     const close= Math.max(open + move, open * 0.001);
     const wick = Math.abs(close - open) * (0.4 + rng() * 1.2);
@@ -697,6 +696,85 @@ function HeroStrip({ onLaunch }) {
 }
 
 /* ══════════════════════════════════════════════
+   AXIOM-STYLE TABLE ROW
+══════════════════════════════════════════════ */
+function MiniSparkline({ data }) {
+  if (!data || data.length < 2) return null;
+  const min = Math.min(...data), max = Math.max(...data);
+  const range = max - min || 1;
+  const w = 80, h = 28;
+  const pts = data.map((v, i) => `${(i/(data.length-1))*w},${h - ((v-min)/range)*(h-4) - 2}`).join(' ');
+  const isUp = data[data.length-1] >= data[0];
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+      <polyline points={pts} fill="none" stroke={isUp ? '#22c55e' : '#ef4444'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function AxiomRow({ coin, onClick }) {
+  const isUp = coin.pct >= 0;
+  const buyRatio = coin.buys && coin.sells ? Math.round((coin.buys / (coin.buys + coin.sells)) * 100) : 55;
+
+  return (
+    <div className="axiom-row" onClick={onClick}>
+      {/* Coin info */}
+      <div className="ar-coin">
+        <CoinAvatar name={coin.name} imageUri={coin.imageUri} size={36} radius={9} />
+        <div className="ar-coin-info">
+          <div className="ar-coin-name-row">
+            <span className="ar-name">{coin.name}</span>
+            <span className="ar-ticker">{coin.ticker}</span>
+            {coin.isNew  && <span className="ar-badge ar-badge--new">NEW</span>}
+            {coin.isHot  && <span className="ar-badge ar-badge--hot">HOT</span>}
+          </div>
+          <div className="ar-creator">by {coin.creator}… · {coin.desc?.slice(0, 38)}{coin.desc?.length > 38 ? '…' : ''}</div>
+        </div>
+      </div>
+
+      {/* Age */}
+      <div className="ar-age">{coin.timeAgo}</div>
+
+      {/* Market Cap */}
+      <div className="ar-mc">{fmtMC(coin.mcVal)}</div>
+
+      {/* Volume */}
+      <div className="ar-vol">
+        <span className="ar-vol-val">{coin.vol || `$${(coin.vol5m || 0).toFixed(1)}K`}</span>
+      </div>
+
+      {/* Txns */}
+      <div className="ar-txns">
+        <span className="ar-txns-val">{(coin.txns || 0).toLocaleString()}</span>
+        <div className="ar-buy-sell-bar">
+          <div className="ar-buy-bar" style={{ width: `${buyRatio}%` }} />
+        </div>
+      </div>
+
+      {/* Buys / Sells */}
+      <div className="ar-buysell">
+        <span className="ar-buys">{(coin.buys || 0).toLocaleString()}</span>
+        <span className="ar-slash">/</span>
+        <span className="ar-sells">{(coin.sells || 0).toLocaleString()}</span>
+      </div>
+
+      {/* Mini chart */}
+      <div className="ar-chart">
+        <MiniSparkline data={coin.spark} />
+        <span className={`ar-pct ${isUp ? 'up' : 'down'}`}>{isUp ? '+' : ''}{(coin.pct || 0).toFixed(1)}%</span>
+      </div>
+
+      {/* Action */}
+      <div className="ar-action">
+        <button className="ar-buy-btn" onClick={e => { e.stopPropagation(); onClick(); }}>
+          Buy
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════
    PHANTOM WALLET BUTTON
 ══════════════════════════════════════════════ */
 function WalletButton() {
@@ -961,15 +1039,27 @@ export default function MistApp() {
   const [coins,      setCoins]      = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [countdown,  setCountdown]  = useState(30);
   const [search,     setSearch]     = useState('');
   const [tradeModal, setTradeModal] = useState(null);
   const [launchModal,setLaunchModal]= useState(false);
+  const countdownRef = useRef(null);
+
+  const startCountdown = useCallback(() => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    setCountdown(30);
+    countdownRef.current = setInterval(() => {
+      setCountdown(c => {
+        if (c <= 1) return 30;
+        return c - 1;
+      });
+    }, 1000);
+  }, []);
 
   const fetchCoins = useCallback(async (tab, silent = false) => {
-    // silent = background refresh — never wipe the grid
     if (!silent) setLoading(true);
-    else setRefreshing(true);
-
+    setRefreshing(true);
     const sortMap = { hot: 'last_trade_timestamp', new: 'created_timestamp', trending: 'usd_market_cap', all: 'last_trade_timestamp' };
     const sort = sortMap[tab] || 'last_trade_timestamp';
 
@@ -980,31 +1070,45 @@ export default function MistApp() {
           ...transformCoin(c, i),
           isNew: tab === 'new',
           isHot: tab === 'hot' && i < 5,
+          // randomise txns/buys/sells per coin for display
+          txns:  Math.floor(Math.random() * 800 + 20),
+          buys:  Math.floor(Math.random() * 400 + 10),
+          sells: Math.floor(Math.random() * 400 + 10),
+          liq:   `$${(Math.random() * 50 + 1).toFixed(1)}K`,
+          vol:   `$${(Math.random() * 60 + 0.5).toFixed(1)}K`,
         }));
         setCoins(transformed);
+        setLastUpdate(new Date());
         setLoading(false);
         setRefreshing(false);
+        startCountdown();
         return;
       }
     } catch (_) {}
 
-    // API failed — use demo coins so UI is never empty
     const demo = DEMO_COINS.map(c => ({
       ...c,
       isNew: tab === 'new' ? c.isNew : false,
       isHot: tab === 'hot' ? c.isHot : false,
+      txns: Math.floor(Math.random() * 500 + 20),
+      buys: Math.floor(Math.random() * 250 + 10),
+      sells:Math.floor(Math.random() * 250 + 10),
+      liq:  `$${(Math.random() * 20 + 1).toFixed(1)}K`,
+      vol:  `$${(Math.random() * 30 + 0.5).toFixed(1)}K`,
     }));
     if (tab === 'trending') demo.sort((a, b) => b.mcVal - a.mcVal);
     if (tab === 'new')      demo.sort((a, b) => (b.isNew ? 1 : 0) - (a.isNew ? 1 : 0));
-    setCoins(prev => prev.length > 0 ? prev : demo); // keep existing if we have data
+    setCoins(prev => prev.length > 0 ? prev : demo);
+    setLastUpdate(new Date());
     setLoading(false);
     setRefreshing(false);
-  }, []);
+    startCountdown();
+  }, [startCountdown]);
 
   useEffect(() => { fetchCoins(activeTab, false); }, [activeTab, fetchCoins]);
   useEffect(() => {
-    const iv = setInterval(() => fetchCoins(activeTab, true), 20000); // silent bg refresh
-    return () => clearInterval(iv);
+    const iv = setInterval(() => fetchCoins(activeTab, true), 30000);
+    return () => { clearInterval(iv); if (countdownRef.current) clearInterval(countdownRef.current); };
   }, [activeTab, fetchCoins]);
 
   const filtered = coins.filter(c =>
@@ -1058,82 +1162,63 @@ export default function MistApp() {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
               <input placeholder="Search coins…" value={search} onChange={e => setSearch(e.target.value)} />
             </div>
-            <button className="refresh-btn" onClick={() => fetchCoins(activeTab, true)}>
+            <button className={`refresh-btn${refreshing ? ' refresh-btn--active' : ''}`}
+              onClick={() => fetchCoins(activeTab, true)}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                style={{ animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }}>
+                style={{ animation: refreshing ? 'spin 0.6s linear infinite' : 'none' }}>
                 <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
                 <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
               </svg>
-              {refreshing ? 'Refreshing…' : 'Refresh'}
+              {refreshing ? 'Updating…' : `Refresh`}
             </button>
+            <div className="countdown-badge" title="Auto-refreshes every 30 seconds">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              {countdown}s
+            </div>
             <button className="launch-btn" onClick={() => setLaunchModal(true)}>+ Launch Coin</button>
           </div>
         </div>
 
-        {/* ── HOT TABLE (hot tab only) ── */}
-        {activeTab === 'hot' && !loading && filtered.length > 0 && (
-          <div className="hot-section">
-            <div className="section-label">
-              <span className="live-pill">● LIVE</span>
-              Top by 5-minute volume
-            </div>
-            <div className="hot-table">
-              <div className="hot-head">
-                <span>#</span><span>Coin</span><span>Vol 5m</span><span>Mkt Cap</span><span>Age</span><span>Change</span>
+        {/* ── AXIOM-STYLE COIN TABLE ── */}
+        {!loading && filtered.length > 0 && (
+          <div className="axiom-table-wrap">
+            {lastUpdate && (
+              <div className="axiom-meta">
+                <span className="live-pill">● LIVE</span>
+                <span className="axiom-update-time">
+                  Last updated {lastUpdate.toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  {refreshing && <span className="axiom-updating"> · updating…</span>}
+                </span>
+                <span className="axiom-count">{filtered.length} coins</span>
               </div>
-              {filtered.slice(0, 10).map((c, i) => (
-                <HotRow key={c.id} coin={c} rank={i + 1} maxVol={maxVol} onClick={setTradeModal} />
+            )}
+            <div className="axiom-table">
+              {/* Header */}
+              <div className="axiom-head">
+                <span className="ah-coin">Coin</span>
+                <span className="ah-age">Age</span>
+                <span className="ah-mc">Mkt Cap</span>
+                <span className="ah-vol">Volume</span>
+                <span className="ah-txns">Txns</span>
+                <span className="ah-buysell">Buys / Sells</span>
+                <span className="ah-chart">5m Chart</span>
+                <span className="ah-action">Action</span>
+              </div>
+              {/* Rows */}
+              {filtered.map((coin, i) => (
+                <AxiomRow key={coin.id} coin={coin} rank={i+1} onClick={() => setTradeModal(coin)} />
               ))}
             </div>
           </div>
         )}
-
-        {/* ── NEW PAIRS FEED (new tab) ── */}
-        {activeTab === 'new' && !loading && filtered.length > 0 && (
-          <div className="new-feed-section">
-            <div className="section-label">
-              <span className="live-pill">● LIVE</span>
-              Freshly launched — sorted by creation time
-            </div>
-            <div className="new-feed">
-              {filtered.slice(0, 20).map(coin => (
-                <div key={coin.id} className="new-feed-row" onClick={() => setTradeModal(coin)}>
-                  <CoinAvatar name={coin.name} imageUri={coin.imageUri} size={38} radius={10} />
-                  <div className="new-feed-info">
-                    <span className="new-feed-name">{coin.name}</span>
-                    <span className="new-feed-ticker">{coin.ticker}</span>
-                  </div>
-                  <div className="new-feed-mc">{fmtMC(coin.mcVal)}</div>
-                  <div className="new-feed-age">{coin.timeAgo} ago</div>
-                  <div className="new-feed-creator">by {coin.creator}…</div>
-                  <div className="new-feed-desc">{coin.desc}</div>
-                  <button className="new-feed-trade">Trade →</button>
-                </div>
-              ))}
-            </div>
+        {loading && coins.length === 0 && (
+          <div className="coins-loading">
+            {Array.from({ length: 12 }, (_, i) => <div key={i} className="coin-skeleton" style={{ height: 56, borderRadius: 10 }} />)}
           </div>
         )}
 
-        {/* ── COIN GRID ── */}
-        {(activeTab === 'trending' || activeTab === 'all' || activeTab === 'hot' || activeTab === 'new') && (
-          <div className="coins-section">
-            {(activeTab === 'hot' || activeTab === 'new') && (
-              <div className="section-label" style={{ marginTop: 32 }}>All coins</div>
-            )}
-            {loading && coins.length === 0 ? (
-              <div className="coins-loading">
-                {Array.from({ length: 12 }, (_, i) => <div key={i} className="coin-skeleton" />)}
-              </div>
-            ) : filtered.length === 0 ? (
-              <div className="coins-empty">No coins found. Try a different search.</div>
-            ) : (
-              <div className="coins-grid">
-                {filtered.map(coin => (
-                  <CoinCard key={coin.id} coin={coin} onClick={setTradeModal} />
-                ))}
-              </div>
-            )}
-          </div>
+        {!loading && filtered.length === 0 && (
+          <div className="coins-empty">No coins found. Try a different search.</div>
         )}
       </main>
 
