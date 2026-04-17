@@ -159,12 +159,15 @@ function TradingChart({ mint, basePrice, coinId }) {
   const containerRef = useRef();
   const seriesRef    = useRef();
   const chartRef     = useRef();
-  const liveRef      = useRef(null);   // current forming candle
-  const priceRef     = useRef(basePrice);
+  const liveRef      = useRef(null);
+  const priceRef     = useRef(basePrice || 0.0001);
 
-  const [price, setPrice] = useState(basePrice);
+  // Use basePrice as the real starting price — never show 0
+  const safeBase = basePrice && basePrice > 0 ? basePrice : 0.0001;
+
+  const [price, setPrice] = useState(safeBase);
   const [pct,   setPct]   = useState(0);
-  const startRef = useRef(basePrice);
+  const startRef = useRef(safeBase);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -187,13 +190,24 @@ function TradingChart({ mint, basePrice, coinId }) {
       rightPriceScale: {
         borderColor: '#181818',
         textColor:   '#444',
-        minimumWidth: 70,
+        minimumWidth: 80,
+        mode: 0,
       },
       timeScale: {
         borderColor:    '#181818',
         timeVisible:    true,
         secondsVisible: false,
         fixLeftEdge:    true,
+      },
+      localization: {
+        priceFormatter: p => {
+          if (!p || p === 0) return '$0';
+          if (p < 0.000001) return `$${p.toExponential(2)}`;
+          if (p < 0.0001)   return `$${p.toFixed(8)}`;
+          if (p < 0.01)     return `$${p.toFixed(6)}`;
+          if (p < 1)        return `$${p.toFixed(4)}`;
+          return `$${p.toFixed(2)}`;
+        },
       },
       handleScroll:   true,
       handleScale:    true,
@@ -210,12 +224,11 @@ function TradingChart({ mint, basePrice, coinId }) {
     seriesRef.current = series;
 
     // ── Step 1: show simulated history immediately ──
-    const history = buildHistory(basePrice, coinId || mint || 'default', 80);
+    const history = buildHistory(safeBase, coinId || mint || 'default', 80);
     series.setData(history);
     startRef.current = history[0].open;
     chart.timeScale().fitContent();
 
-    // Seed the live candle from last historical price
     const lastHist = history[history.length - 1];
     liveRef.current = {
       time:  Math.floor(Date.now() / 1000),
@@ -225,6 +238,8 @@ function TradingChart({ mint, basePrice, coinId }) {
       close: lastHist.close,
     };
     priceRef.current = lastHist.close;
+    setPrice(lastHist.close);
+    setPct(((lastHist.close - history[0].open) / history[0].open) * 100);
 
     // ── Step 2: animate the live forming candle every 400ms ──
     const tickIv = setInterval(() => {
@@ -338,35 +353,65 @@ function TradingChart({ mint, basePrice, coinId }) {
 }
 
 /* ══════════════════════════════════════════════
-   LIVE TX FEED
+   LIVE TX FEED — instant sim + real data overlay
 ══════════════════════════════════════════════ */
-function TxFeed({ mint, ticker }) {
-  const [txs, setTxs]     = useState([]);
-  const [loading, setLoad] = useState(true);
+const TX_WALLETS = ['7xKp2','3mRf9','Bv4nQ','9cJwL','Fk1Ta','2pXsE','Hn8dY','Qr5mZ','Lv3cW','Kp6tN','Ws4nB','Ry7vM'];
+
+function genSimTx(ticker, basePrice, idx) {
+  const type   = Math.random() > 0.42 ? 'buy' : 'sell';
+  const sol    = parseFloat((Math.random() * 5 + 0.05).toFixed(3));
+  const tokens = Math.floor(sol / (basePrice || 0.0001));
+  const wallet = TX_WALLETS[Math.floor(Math.random() * TX_WALLETS.length)];
+  const d      = new Date(Date.now() - idx * (3000 + Math.random() * 5000));
+  return {
+    id:     `sim-${idx}-${Date.now()}`,
+    type, sol, ticker,
+    tokens: tokens.toLocaleString(),
+    wallet,
+    ts: d.toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+  };
+}
+
+function TxFeed({ mint, ticker, basePrice }) {
+  const [txs, setTxs] = useState(() =>
+    // Seed 8 instant simulated transactions — never shows "Fetching"
+    Array.from({ length: 8 }, (_, i) => genSimTx(ticker, basePrice, i))
+  );
   const seen = useRef(new Set());
 
+  // Stream new simulated txs every 1.5–3s
   useEffect(() => {
-    if (!mint) return;
+    const iv = setInterval(() => {
+      setTxs(prev => [genSimTx(ticker, basePrice, 0), ...prev].slice(0, 40));
+    }, 1500 + Math.random() * 1500);
+    return () => clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticker]);
+
+  // Try real API in background — replace sims when data arrives
+  useEffect(() => {
+    if (!mint || mint.startsWith('d')) return; // skip demo coins
     const load = async () => {
       const data = await pumpFetch(`/trades/all?mint=${mint}&offset=0&limit=30&minimumSize=0`);
-      if (!Array.isArray(data)) return;
+      if (!Array.isArray(data) || !data.length) return;
       const fresh = data.filter(t => !seen.current.has(t.signature)).map(t => {
         seen.current.add(t.signature);
         return {
-          id: t.signature, type: t.is_buy ? 'buy' : 'sell',
-          sol: (t.sol_amount / 1e9).toFixed(3),
+          id:     t.signature,
+          type:   t.is_buy ? 'buy' : 'sell',
+          sol:    (t.sol_amount / 1e9).toFixed(3),
           tokens: Math.floor(t.token_amount).toLocaleString(),
           wallet: (t.user || '???').slice(0, 6),
+          ticker,
           ts: new Date(t.timestamp * 1000).toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
         };
       });
-      if (fresh.length) setTxs(p => [...fresh, ...p].slice(0, 40));
-      setLoad(false);
+      if (fresh.length) setTxs(prev => [...fresh, ...prev].slice(0, 40));
     };
     load();
-    const iv = setInterval(load, 3500);
+    const iv = setInterval(load, 4000);
     return () => clearInterval(iv);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mint]);
 
   return (
@@ -376,8 +421,6 @@ function TxFeed({ mint, ticker }) {
         <span className="live-pill">● LIVE</span>
       </div>
       <div className="txfeed-list">
-        {loading && <div className="txfeed-empty">Fetching trades…</div>}
-        {!loading && txs.length === 0 && <div className="txfeed-empty">No trades yet</div>}
         {txs.map(tx => (
           <div key={tx.id} className={`txfeed-row txfeed-row--${tx.type}`}>
             <span className={`txfeed-type txfeed-type--${tx.type}`}>{tx.type.toUpperCase()}</span>
@@ -435,7 +478,7 @@ function TradeModal({ coin, onClose }) {
         <TradingChart mint={coin.mint} basePrice={coin.basePrice || 0.0001} coinId={coin.id} />
 
         {/* Tx Feed */}
-        <TxFeed mint={coin.mint} ticker={coin.ticker} />
+        <TxFeed mint={coin.mint} ticker={coin.ticker} basePrice={coin.basePrice} />
 
         {/* Trade Panel */}
         <div className="trade-panel">
@@ -463,63 +506,6 @@ function TradeModal({ coin, onClose }) {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════
-   COIN CARD
-══════════════════════════════════════════════ */
-function CoinCard({ coin, onClick }) {
-  const isUp = coin.timeDir !== 'down';
-  return (
-    <div className="coin-card" onClick={() => onClick(coin)}>
-      <div className="coin-card-img" style={{ background: coin.gradient }}>
-        <CoinAvatar name={coin.name} imageUri={coin.imageUri} size={56} radius={14} />
-        {coin.isNew && <span className="coin-badge coin-badge--new">NEW</span>}
-        {coin.isHot && <span className="coin-badge coin-badge--hot">🔥 HOT</span>}
-      </div>
-      <div className="coin-card-body">
-        <div className="coin-card-row1">
-          <span className="coin-card-name">{coin.name}</span>
-          <span className="coin-card-ticker">{coin.ticker}</span>
-        </div>
-        <div className="coin-card-mc">{fmtMC(coin.mcVal)}</div>
-        <div className="coin-card-meta">
-          <span className="coin-card-creator">{coin.creator}</span>
-          <span className={`coin-card-time ${isUp ? 'up' : 'down'}`}>
-            {isUp ? '▲' : '▼'} {coin.timeAgo}
-          </span>
-        </div>
-        {coin.desc && <p className="coin-card-desc">{coin.desc}</p>}
-      </div>
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════
-   HOT TABLE ROW
-══════════════════════════════════════════════ */
-function HotRow({ coin, rank, maxVol, onClick }) {
-  return (
-    <div className="hot-row" onClick={() => onClick(coin)}>
-      <span className="hot-rank">#{rank}</span>
-      <span className="hot-coin">
-        <CoinAvatar name={coin.name} imageUri={coin.imageUri} size={32} radius={8} />
-        <span className="hot-coin-info">
-          <span className="hot-coin-name">{coin.name}</span>
-          <span className="hot-coin-ticker">{coin.ticker}</span>
-        </span>
-      </span>
-      <span className="hot-vol-cell">
-        <span className="hot-vol-bar-wrap"><span className="hot-vol-bar" style={{ width: `${Math.min((coin.vol5m / maxVol) * 100, 100)}%` }} /></span>
-        <span className="hot-vol-num">{(coin.vol5m || 0).toFixed(1)} SOL</span>
-      </span>
-      <span className="hot-mc">{fmtMC(coin.mcVal)}</span>
-      <span className="hot-age">{coin.timeAgo}</span>
-      <span className="hot-pct" style={{ color: coin.pct >= 0 ? '#22c55e' : '#ef4444' }}>
-        {coin.pct >= 0 ? '+' : ''}{(coin.pct || 0).toFixed(1)}%
-      </span>
     </div>
   );
 }
@@ -1114,7 +1100,7 @@ export default function MistApp() {
   const filtered = coins.filter(c =>
     !search || c.name.toLowerCase().includes(search.toLowerCase()) || c.ticker.toLowerCase().includes(search.toLowerCase())
   );
-  const maxVol = Math.max(...filtered.map(c => c.vol5m || 0), 1);
+
 
   return (
     <div className="mist-root">
