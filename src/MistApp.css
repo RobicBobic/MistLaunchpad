@@ -233,26 +233,35 @@ a {
   margin-left: auto;
 }
 
+.hero-strip-btn-twitter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: var(--white);
+  color: var(--black);
+  border-radius: 50%;
+  transition: opacity 0.15s ease, transform 0.2s var(--ease);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.hero-strip-btn-twitter:hover { opacity: 0.88; transform: translateY(-2px); }
+
 .nav-twitter {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 15px;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
   border: 1px solid var(--line);
-  border-radius: 99px;
-  font-size: 12.5px;
-  font-weight: 600;
+  border-radius: 50%;
   color: var(--mid);
   background: var(--bg1);
   transition: all 0.15s ease;
-  white-space: nowrap;
+  flex-shrink: 0;
 }
-.nav-twitter:hover {
-  border-color: var(--line-hi);
-  color: var(--white);
-}
-
-/* ── Wallet Button ── */
+.nav-twitter:hover { border-color: var(--line-hi); color: var(--white); }
 .wallet-btn {
   display: flex;
   align-items: center;
@@ -317,23 +326,6 @@ a {
 .wallet-disconnect:hover { color: #22c55e; }
 
 /* ── Hero Twitter button ── */
-.hero-strip-btn-twitter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 22px;
-  background: var(--white);
-  color: var(--black);
-  border-radius: 99px;
-  font-size: 13.5px;
-  font-weight: 700;
-  letter-spacing: -0.2px;
-  white-space: nowrap;
-  transition: opacity 0.15s ease, transform 0.2s var(--ease);
-  text-decoration: none;
-}
-.hero-strip-btn-twitter:hover { opacity: 0.88; transform: translateY(-2px); }
-
 /* ═══════════════════════════════════════════
    MAIN CONTENT
 ═══════════════════════════════════════════ */
